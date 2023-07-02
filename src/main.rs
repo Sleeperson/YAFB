@@ -10,11 +10,18 @@ const PLAYER_INIT_Y : i32 = 25;
 const SCREEN_WIDTH : i32 = 80;
 const SCREEN_HEIGHT: i32 = 50;
 const FRAME_DURATION: f32 = 75.0;
-
+const MIN_OBSTACLE_OFFSET : i32 =20;
+#[derive(Debug)]
 struct Player{
     x: i32,
     y: i32,
     velocity: f32,
+}
+#[derive(Debug)]
+struct Obstacle{
+    x: i32,
+    gap_y: i32,
+    size : i32,
 }
 
 struct State{
@@ -22,6 +29,55 @@ struct State{
     player_name: String,
     frame_time: f32,
     player: Player,
+    obstacles: Vec<Obstacle>,
+    last_obstacle_x : i32,
+    score : i32,
+}
+
+impl Obstacle {
+    fn new(x:i32, score: i32) -> Self {
+        let mut random=RandomNumberGenerator::new();
+        println!("New Obstacle with {}",x);
+        Self {
+            x: x,
+            gap_y: random.range(10,40),
+            size: i32::max(5, 20-score)
+        }
+    }
+    
+    fn check_and_reset(&mut self,x:i32, score: i32, last_x: i32) -> bool {
+        let mut reset = false;
+        if self.x <= x-PLAYER_INIT_X {
+            println!("Check {} {} {}",self.x,x,PLAYER_INIT_X);
+            let mut random=RandomNumberGenerator::new();
+            self.x = last_x+2*MIN_OBSTACLE_OFFSET;//+random.range(0,20);
+            self.size = 2*i32::max(3,10-score);
+            self.gap_y = random.range(10,40);
+            reset = true;
+        }
+        reset
+    }
+    fn render(&mut self, ctx: &mut BTerm, player_x : i32) {
+        if self.x - player_x < SCREEN_WIDTH - PLAYER_INIT_X {
+            let screen_x = self.x - player_x;
+            let half_size = self.size/2;
+
+            for y in 0..self.gap_y-half_size {
+                ctx.set(screen_x,y, RED, BLACK,to_cp437('/'));
+            }
+            for y in self.gap_y+half_size..SCREEN_HEIGHT {
+                ctx.set(screen_x,y, RED, BLACK,to_cp437('/'));
+            }
+
+        }
+    }
+
+    fn hit_player(&mut self, player: &Player) -> bool {
+        let x_match = self.x-5 == player.x;
+        let below_gap = player.y > self.gap_y+self.size/2;
+        let above_gap = player.y < self.gap_y-self.size/2;
+        x_match && (below_gap || above_gap)
+    }
 }
 impl Player{
     fn new(x: i32, y: i32) ->Self {
@@ -63,8 +119,15 @@ impl State{
         State {
             mode :  GameMode::Menu,
             player_name : String::from("Player1"),
-            player : Player::new(PLAYER_INIT_X, PLAYER_INIT_Y),
             frame_time: 0.0,
+            player : Player::new(PLAYER_INIT_X, PLAYER_INIT_Y),
+            obstacles: vec![
+                Obstacle::new(80,0),
+                Obstacle::new(160,0),
+                Obstacle::new(240,0),
+            ],
+            last_obstacle_x : SCREEN_WIDTH*3,
+            score : 0,
         }
     }
     fn main_menu(&mut self, ctx: &mut BTerm) {
@@ -75,7 +138,7 @@ impl State{
 
         if let Some(key) = ctx.key {
             match key {
-                VirtualKeyCode::S => self.start(ctx),
+                VirtualKeyCode::S => self.mode = GameMode::Playing,
                 VirtualKeyCode::H => self.mode = GameMode::HighScore,
                 VirtualKeyCode::Q => ctx.quitting = true,
                 _ => {}
@@ -86,7 +149,7 @@ impl State{
         ctx.print_centered(5, "Game Over");
         ctx.print_centered(6,"Player Name:");
         ctx.print_centered(7,&format!("{}",self.player_name));
-        ctx.print_centered(8,&format!("Score: {}",self.player.x-PLAYER_INIT_X));
+        ctx.print_centered(8,&format!("Score: {}",self.score));
         ctx.print_centered(9,"Press  to (E)dit and Enter to confirm");
         ctx.print_centered(10,"Press to (M)ain Menu");
         ctx.print_centered(11,"Press to (R)estart");
@@ -129,20 +192,47 @@ impl State{
         if self.frame_time >= FRAME_DURATION {
             self.frame_time = 0.0;
             self.player.gravity_and_move();
+            for ob in &mut self.obstacles {
+                if ob.hit_player(&self.player) {
+                    println!("Hit detected! {:?} {:?}",ob,self.player);
+                    self.mode = GameMode::End;
+                    return
+                }
+                let obstacle_reset = ob.check_and_reset(self.player.x,self.score,self.last_obstacle_x);
+                if obstacle_reset {
+                    self.score +=1;
+                    self.last_obstacle_x = ob.x;
+                }
+            }
+
         }
 
         if let Some(VirtualKeyCode::Space) = ctx.key {
             self.player.flap();
         }
         self.player.render(ctx);
+        for ob in &mut self.obstacles {
+            ob.render(ctx,self.player.x);
+        }
         if self.player.y >SCREEN_HEIGHT {
             self.mode = GameMode::End;
         }
+        ctx.print(0,0,format!("p.x {}",self.player.x));
+        ctx.print(10,0,format!("o1.x {}",self.obstacles[0].x));
+        ctx.print(20,0,format!("o2.x {}",self.obstacles[1].x));
+        ctx.print(30,0,format!("o3.x {}",self.obstacles[2].x));
+ 
+        ctx.print(70,0,format!("Score {}",self.score));
     } 
 
     fn start(&mut self, ctx: &mut BTerm) {
         self.player.reset(PLAYER_INIT_X,PLAYER_INIT_Y);
+        self.score = 0;
+        for i in 0..3 {
+            self.obstacles[i] = Obstacle::new(SCREEN_WIDTH*(i as i32 + 1),0);
+        }
         self.mode=GameMode::Playing;
+        self.last_obstacle_x = 240;
     }
 
     fn save(&mut self, ctx: &mut BTerm) {
@@ -150,8 +240,6 @@ impl State{
 }
 impl GameState for State{
     fn tick(&mut self,ctx: &mut BTerm){
-        ctx.cls();
-        ctx.print(0,0,"Hello, Bracket Terminal");
         match self.mode {
             GameMode::Menu => self.main_menu(ctx),
             GameMode::End => self.dead(ctx),
@@ -164,5 +252,7 @@ fn main() -> BError {
     let context = BTermBuilder::simple80x50()
         .with_title("Yet Another Flappy Bird")
         .build()?;
-    main_loop(context,State::new())
+    let state = State::new();
+    println!("Init done!");
+    main_loop(context,state)
 }
