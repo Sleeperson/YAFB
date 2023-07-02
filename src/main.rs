@@ -3,7 +3,8 @@ enum GameMode {
     Menu,
     HighScore,
     Playing,
-    End
+    Edit,
+    End,
 }
 const PLAYER_INIT_X : i32 = 5;
 const PLAYER_INIT_Y : i32 = 25;
@@ -24,6 +25,12 @@ struct Obstacle{
     size : i32,
 }
 
+#[derive(Debug)]
+struct Highscore{
+    name : &str,
+    score: i32,
+}
+
 struct State{
     mode: GameMode,
     player_name: String,
@@ -32,6 +39,16 @@ struct State{
     obstacles: Vec<Obstacle>,
     last_obstacle_x : i32,
     score : i32,
+    hscores : Vec<Highscore>,
+}
+
+impl Highscore {
+    fn new(name: &str, score: i32) -> Self {
+        Self {
+            name,
+            score
+        }
+    }
 }
 
 impl Obstacle {
@@ -41,14 +58,13 @@ impl Obstacle {
         Self {
             x: x,
             gap_y: random.range(10,40),
-            size: i32::max(5, 20-score)
+            size: i32::max(5, 20-score/10)
         }
     }
-    
+
     fn check_and_reset(&mut self,x:i32, score: i32, last_x: i32) -> bool {
         let mut reset = false;
         if self.x <= x-PLAYER_INIT_X {
-            println!("Check {} {} {}",self.x,x,PLAYER_INIT_X);
             let mut random=RandomNumberGenerator::new();
             self.x = last_x+2*MIN_OBSTACLE_OFFSET;//+random.range(0,20);
             self.size = 2*i32::max(3,10-score);
@@ -105,32 +121,36 @@ impl Player{
         self.y += self.velocity as i32;
         self.x += 1;
         if self.y < 0{
-              self.y = 0;
-              self.velocity = 0.0;
+            self.y = 0;
+            self.velocity = 0.0;
         }
     }
-    
+
     fn flap(&mut self){
         self.velocity = -5.0;
     }
 }
 impl State{
     fn new() ->Self {
+        let high_scores = Vec::new();
+
         State {
             mode :  GameMode::Menu,
-            player_name : String::from("Player1"),
+            player_name : String::from("PLAYER1"),
             frame_time: 0.0,
             player : Player::new(PLAYER_INIT_X, PLAYER_INIT_Y),
             obstacles: vec![
-                Obstacle::new(80,0),
-                Obstacle::new(160,0),
-                Obstacle::new(240,0),
+                Obstacle::new(SCREEN_WIDTH,0),
+                Obstacle::new(SCREEN_WIDTH*2,0),
+                Obstacle::new(SCREEN_WIDTH*3,0),
             ],
             last_obstacle_x : SCREEN_WIDTH*3,
             score : 0,
+            hscores: high_scores,
         }
     }
     fn main_menu(&mut self, ctx: &mut BTerm) {
+        ctx.cls();
         ctx.print_centered(5, "Welcome to Yet Another Flappy Bird!");
         ctx.print_centered(6, "Press to (S)tart");
         ctx.print_centered(7, "Press to view (H)igh scores");
@@ -146,6 +166,7 @@ impl State{
         }
     }
     fn dead(&mut self, ctx: &mut BTerm) {
+        ctx.cls_bg(BLACK);
         ctx.print_centered(5, "Game Over");
         ctx.print_centered(6,"Player Name:");
         ctx.print_centered(7,&format!("{}",self.player_name));
@@ -159,6 +180,7 @@ impl State{
             match key {
                 VirtualKeyCode::Return => self.save(ctx),
                 VirtualKeyCode::M => self.mode = GameMode::Menu,
+                VirtualKeyCode::E => self.mode = GameMode::Edit,
                 VirtualKeyCode::R => self.start(ctx),
                 VirtualKeyCode::Q => ctx.quitting = true,
                 _ => {}
@@ -166,8 +188,34 @@ impl State{
         }
     }
 
+    fn edit(&mut self, ctx: &mut BTerm) {
+        ctx.cls();
+        ctx.print_centered(6,"Player Name:");
+        ctx.print_centered(7,&format!("{}_",self.player_name));
+        ctx.print_centered(8,"Press Enter to confirm");
+
+        if let Some(key) = ctx.key {
+            match key {
+                VirtualKeyCode::Return => self.mode = GameMode::End,
+                VirtualKeyCode::Back => {let _ = self.player_name.pop();},
+                _ => { 
+                        let mut key_val = key as u8;
+                        if key_val < 10 {
+                            key_val = (key_val + 1) %10;
+                            self.player_name.push(('0' as u8+ key_val) as char);
+                    }
+                    else if key_val < 36 {
+                        key_val = key_val -10;
+                        self.player_name.push(('A' as u8 + key_val) as char);
+                    }
+                },
+            }
+        } 
+    }
+
     fn score(&mut self, ctx: &mut BTerm) {
         //todo read file and display top 5 high scores
+        ctx.cls();
         ctx.print_centered(5, "High Scores:");
         ctx.print_centered(6,"1.");
         ctx.print_centered(7,"2.");
@@ -217,11 +265,11 @@ impl State{
         if self.player.y >SCREEN_HEIGHT {
             self.mode = GameMode::End;
         }
-        ctx.print(0,0,format!("p.x {}",self.player.x));
-        ctx.print(10,0,format!("o1.x {}",self.obstacles[0].x));
-        ctx.print(20,0,format!("o2.x {}",self.obstacles[1].x));
-        ctx.print(30,0,format!("o3.x {}",self.obstacles[2].x));
- 
+        //ctx.print(0,0,format!("p.x {}",self.player.x));
+        //ctx.print(10,0,format!("o1.x {}",self.obstacles[0].x));
+        //ctx.print(20,0,format!("o2.x {}",self.obstacles[1].x));
+        //ctx.print(30,0,format!("o3.x {}",self.obstacles[2].x));
+
         ctx.print(70,0,format!("Score {}",self.score));
     } 
 
@@ -232,7 +280,7 @@ impl State{
             self.obstacles[i] = Obstacle::new(SCREEN_WIDTH*(i as i32 + 1),0);
         }
         self.mode=GameMode::Playing;
-        self.last_obstacle_x = 240;
+        self.last_obstacle_x = SCREEN_WIDTH * 3;
     }
 
     fn save(&mut self, ctx: &mut BTerm) {
@@ -244,6 +292,7 @@ impl GameState for State{
             GameMode::Menu => self.main_menu(ctx),
             GameMode::End => self.dead(ctx),
             GameMode::HighScore => self.score(ctx),
+            GameMode::Edit => self.edit(ctx),
             GameMode::Playing => self.play(ctx)
         }
     }
