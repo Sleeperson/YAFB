@@ -1,4 +1,10 @@
 use bracket_lib::prelude::*;
+use std::fs;
+use std::fs::File;
+use std::io::{self, BufRead};
+use std::io::Write;
+use std::path::Path;
+
 enum GameMode {
     Menu,
     HighScore,
@@ -27,7 +33,7 @@ struct Obstacle{
 
 #[derive(Debug)]
 struct Highscore{
-    name : &str,
+    name : String,
     score: i32,
 }
 
@@ -42,8 +48,8 @@ struct State{
     hscores : Vec<Highscore>,
 }
 
-impl Highscore {
-    fn new(name: &str, score: i32) -> Self {
+impl Highscore{
+    fn new(name: String, score: i32) -> Self {
         Self {
             name,
             score
@@ -56,7 +62,7 @@ impl Obstacle {
         let mut random=RandomNumberGenerator::new();
         println!("New Obstacle with {}",x);
         Self {
-            x: x,
+            x,
             gap_y: random.range(10,40),
             size: i32::max(5, 20-score/10)
         }
@@ -130,10 +136,28 @@ impl Player{
         self.velocity = -5.0;
     }
 }
+
+fn read_lines<P>(filename: P) -> io::Result<io::Lines<io::BufReader<File>>>
+    where P: AsRef<Path>, {
+    let file = File::open(filename)?;
+    Ok(io::BufReader::new(file).lines())
+}
+
 impl State{
     fn new() ->Self {
-        let high_scores = Vec::new();
-
+        let mut high_scores = Vec::new();
+        
+        if let Ok(lines) = read_lines("assets/hs.txt") {
+        // Consumes the iterator, returns an (Optional) String
+            for l in lines {
+                let new_line = l.unwrap(); 
+                {
+                    let tokens = new_line.split(' ').collect::<Vec<_>>();
+                    high_scores.push(Highscore::new(tokens[0].to_string(), tokens[1].parse::<i32>().unwrap()));
+                }
+            }
+        }
+    
         State {
             mode :  GameMode::Menu,
             player_name : String::from("PLAYER1"),
@@ -169,19 +193,19 @@ impl State{
         ctx.cls_bg(BLACK);
         ctx.print_centered(5, "Game Over");
         ctx.print_centered(6,"Player Name:");
-        ctx.print_centered(7,&format!("{}",self.player_name));
+        ctx.print_centered(7,self.player_name.to_string());
         ctx.print_centered(8,&format!("Score: {}",self.score));
-        ctx.print_centered(9,"Press  to (E)dit and Enter to confirm");
+        ctx.print_centered(9,"Press  to (E)dit and Enter to save");
         ctx.print_centered(10,"Press to (M)ain Menu");
         ctx.print_centered(11,"Press to (R)estart");
         ctx.print_centered(12,"Press to (Q)uit");
 
         if let Some(key) = ctx.key {
             match key {
-                VirtualKeyCode::Return => self.save(ctx),
+                VirtualKeyCode::Return => self.save(),
                 VirtualKeyCode::M => self.mode = GameMode::Menu,
                 VirtualKeyCode::E => self.mode = GameMode::Edit,
-                VirtualKeyCode::R => self.start(ctx),
+                VirtualKeyCode::R => self.start(),
                 VirtualKeyCode::Q => ctx.quitting = true,
                 _ => {}
             }
@@ -196,17 +220,17 @@ impl State{
 
         if let Some(key) = ctx.key {
             match key {
-                VirtualKeyCode::Return => self.mode = GameMode::End,
+                VirtualKeyCode::Return => {self.mode = GameMode::End;},
                 VirtualKeyCode::Back => {let _ = self.player_name.pop();},
                 _ => { 
                         let mut key_val = key as u8;
                         if key_val < 10 {
                             key_val = (key_val + 1) %10;
-                            self.player_name.push(('0' as u8+ key_val) as char);
+                            self.player_name.push((b'0' + key_val) as char);
                     }
                     else if key_val < 36 {
-                        key_val = key_val -10;
-                        self.player_name.push(('A' as u8 + key_val) as char);
+                        key_val -= 10;
+                        self.player_name.push((b'A' + key_val) as char);
                     }
                 },
             }
@@ -217,16 +241,14 @@ impl State{
         //todo read file and display top 5 high scores
         ctx.cls();
         ctx.print_centered(5, "High Scores:");
-        ctx.print_centered(6,"1.");
-        ctx.print_centered(7,"2.");
-        ctx.print_centered(8,"3.");
-        ctx.print_centered(9,"4.");
-        ctx.print_centered(10,"5.");
+        for (offset,h) in self.hscores.iter().enumerate(){
+            ctx.print_centered(6+offset,&format!("{}. {} - {}" , offset+1, h.name, h.score));
+        }
         ctx.print_centered(11,"Press to (M)ain Menu");
 
         if let Some(key) = ctx.key {
             match key {
-                VirtualKeyCode::S => self.start(ctx),
+                VirtualKeyCode::S => self.start(),
                 VirtualKeyCode::M => self.mode = GameMode::Menu,
                 _ => {}
             }
@@ -273,7 +295,7 @@ impl State{
         ctx.print(70,0,format!("Score {}",self.score));
     } 
 
-    fn start(&mut self, ctx: &mut BTerm) {
+    fn start(&mut self) {
         self.player.reset(PLAYER_INIT_X,PLAYER_INIT_Y);
         self.score = 0;
         for i in 0..3 {
@@ -283,7 +305,35 @@ impl State{
         self.last_obstacle_x = SCREEN_WIDTH * 3;
     }
 
-    fn save(&mut self, ctx: &mut BTerm) {
+    fn save(&mut self) {
+        if self.score > 0 {
+            let last = self.hscores.last();
+            {
+                match last {
+                    Some(_) => { 
+                        let mut insert_position = self.hscores.len();
+                        while insert_position !=0 && self.score > self.hscores[insert_position-1].score {
+                            insert_position -=1;
+                        }
+                        self.hscores.insert(insert_position, Highscore::new(self.player_name.clone(),self.score));
+                        if self.hscores.len() > 5 {
+                            self.hscores.pop();
+                        }
+                    },
+                    None => self.hscores.insert(0,Highscore::new(self.player_name.clone(),self.score)),
+                }
+                let _ = fs::remove_file("assets/hs.txt");
+                
+                let mut data_file = File::create("assets/hs.txt").expect("Creation failed");
+
+                for h in &self.hscores {
+                     let result =  data_file.write(&format!("{} {}\n",h.name,h.score).into_bytes()).expect("write failed");
+                     if result == 0 {
+                        println!("Error writing high score!")
+                     }
+                }
+            }
+        }
     }
 }
 impl GameState for State{
